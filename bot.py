@@ -14,12 +14,12 @@ log = logging.getLogger("repost-bot")
 SOURCE_CHANNELS = [c.strip().lstrip("@") for c in os.environ.get("SOURCE_CHANNELS", "").split(",") if c.strip()]
 TARGET_CHAT_ID = os.environ.get("TARGET_CHAT_ID", "")          # مثلاً @mychannel یا -100123456789
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "300"))  # هر ۵ دقیقه
 STATE_FILE = "/data/seen_ids.json" if os.path.isdir("/data") else "seen_ids.json"
 
-DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_MODEL = "deepseek-chat"
+GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 FOOTER = "#raptor\n————————\n@khaatshekaan"
 
@@ -81,26 +81,22 @@ def fetch_channel_posts(channel):
     return posts
 
 
-def rewrite_with_deepseek(text):
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-    }
+def rewrite_with_gemini(text):
+    headers = {"Content-Type": "application/json"}
+    params = {"key": GEMINI_API_KEY}
     payload = {
-        "model": DEEPSEEK_MODEL,
-        "messages": [
-            {"role": "user", "content": REWRITE_PROMPT.format(content=text)}
-        ],
-        "temperature": 0.7,
-        "max_tokens": 500,
+        "contents": [
+            {"parts": [{"text": REWRITE_PROMPT.format(content=text)}]}
+        ]
     }
-    resp = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)
+    resp = requests.post(GEMINI_API_URL, headers=headers, params=params, json=payload, timeout=60)
     resp.raise_for_status()
     data = resp.json()
-    choices = data.get("choices", [])
-    if not choices:
-        raise ValueError(f"پاسخ نامعتبر از DeepSeek: {data}")
-    return choices[0]["message"]["content"].strip()
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise ValueError(f"پاسخ نامعتبر از Gemini: {data}")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    return "\n".join(p.get("text", "") for p in parts).strip()
 
 
 def send_to_telegram(text):
@@ -139,7 +135,7 @@ def process_once(state):
         for msg_id, text in sorted(new_posts, key=lambda x: x[0]):
             log.info(f"پست جدید از {channel} (id={msg_id}) در حال پردازش...")
             try:
-                rewritten = rewrite_with_deepseek(text)
+                rewritten = rewrite_with_gemini(text)
                 final_msg = build_final_message(rewritten)
                 send_to_telegram(final_msg)
                 log.info(f"پست {msg_id} از {channel} با موفقیت ارسال شد.")
@@ -158,7 +154,7 @@ def main():
         ("SOURCE_CHANNELS", SOURCE_CHANNELS),
         ("TARGET_CHAT_ID", TARGET_CHAT_ID),
         ("BOT_TOKEN", BOT_TOKEN),
-        ("DEEPSEEK_API_KEY", DEEPSEEK_API_KEY),
+        ("GEMINI_API_KEY", GEMINI_API_KEY),
     ] if not val]
     if missing:
         log.error(f"این متغیرها تنظیم نشده‌اند: {', '.join(missing)}")
